@@ -1,0 +1,285 @@
+#define TINY_GSM_MODEM_SIM7600  // A7670's AT instruction is compatible with SIM7600
+
+#include <Arduino.h>
+#include <TinyGPS++.h>
+#include <TinyGsmClient.h>
+#include <Wire.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
+
+#ifndef SerialAT
+#define SerialAT Serial1
+#endif
+
+#ifndef SerialGPS
+#define SerialGPS Serial2
+#endif
+
+#define MODEM_BAUDRATE                      (115200)
+#define MODEM_DTR_PIN                       (25)
+#define MODEM_TX_PIN                        (26)
+#define MODEM_RX_PIN                        (27)
+#define MODEM_PWRKEY_PIN                    (4)
+#define BOARD_PWRON_PIN                     (12)
+#define MODEM_RING_PIN                      (33)
+#define MODEM_RESET_PIN                     (5)
+#define BOARD_MISO_PIN                      (2)
+#define BOARD_MOSI_PIN                      (15)
+#define BOARD_SCK_PIN                       (14)
+#define BOARD_SD_CS_PIN                     (13)
+#define BOARD_BAT_ADC_PIN                   (35)
+#define BOARD_GPS_TX_PIN                    21
+#define BOARD_GPS_RX_PIN                    22
+#define BOARD_GPS_PPS_PIN                   23
+#define BOARD_GPS_WAKEUP_PIN                19
+
+#define SerialMon Serial
+#define SerialAT Serial1
+
+
+#define TINY_GSM_DEBUG SerialMon
+
+#define TINY_GSM_USE_GPRS true
+#define TINY_GSM_USE_WIFI false
+
+#define GSM_PIN ""  // PIN de la tarjeta SIM, si es necesario
+const char apn[] = "internet.comcel.com.co";  // APN de tu operador móvil
+const char gprsUser[] = "comcel";  // Nombre de usuario GPRS, si es necesario
+const char gprsPass[] = "comcel";  // Contraseña de usuario GPRS, si es necesario
+
+const char *networkName = "REPETIDOR MORA";
+const char *networkPswd = "1085347316";
+const char *udpAddress = "192.168.1.124";
+const int udpPort = 3333;
+
+TinyGsm modem(SerialAT);
+TinyGsmClient client(modem);
+
+TinyGPSPlus gps;
+String locationData;
+String MensajeInicio = "¡Hola y bienvenido!\nTu dispositivo esta listo para ayudarte a encontrar a tu mascota. Solo necesitas enviarnos un mensaje y te enviaremos las coordenadas!";
+String numeroCelular = "+573215098953";
+bool EnviadoMensajeBienvenida = false;
+
+WiFiUDP udp;      
+
+void setup() {
+  SerialMon.begin(115200);
+  SerialAT.begin(115200, SERIAL_8N1, MODEM_RX_PIN, MODEM_TX_PIN);
+  SerialGPS.begin(9600, SERIAL_8N1, BOARD_GPS_RX_PIN, BOARD_GPS_TX_PIN);
+  pinMode(MODEM_PWRKEY_PIN, OUTPUT);
+  pinMode(BOARD_PWRON_PIN, OUTPUT);
+  WiFi.begin(networkName, networkPswd);// iniciar WIFI
+  delay(5000);// esperar que conecte o no
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("Wifi Conectado.");
+    EnviarDatos("Wifi Conectado.");
+
+  }else{
+    Serial.println("No Conectado.");
+    EnviarDatos("No Conectado.");
+  }
+}
+
+void loop() {
+
+  conectarRed();//1
+  conectarGPRS();//2
+  LimpiarBuffer();//3
+  LimpiarBuffer();
+  if(!EnviadoMensajeBienvenida){
+    enviarBienvenida();//4
+    EnviadoMensajeBienvenida = true;
+  }
+  coordenadas();
+  SerialMon.println("Listo para recibir mensajes");
+  LeerSMS();
+  coordenadas();
+  enviarCoordenadas();
+  delay(10000); // Espera 10 segundos antes de repetir
+}
+
+
+//1
+void conectarRed() {
+
+  do {
+    digitalWrite(MODEM_PWRKEY_PIN, LOW);
+    delay(1000);
+    digitalWrite(MODEM_PWRKEY_PIN, HIGH);
+    delay(1000);
+    digitalWrite(MODEM_PWRKEY_PIN, LOW);
+    delay(3000);
+    SerialMon.println("Conectando al módulo GSM...");
+    EnviarDatos("Conectando al módulo GSM...");
+  } while (!modem.init());  // Repetir hasta que la inicialización sea exitosa
+
+  SerialMon.print("Conectando a la red...");
+  EnviarDatos("Conectando a la red...");
+
+  if (!modem.waitForNetwork()) {
+    SerialMon.println("Fallo al conectarse a la red");
+    EnviarDatos("Fallo al conectarse a la red");
+    while (true);
+  }
+  SerialMon.println("Conexión exitosa a la red");
+  EnviarDatos("Conexión exitosa a la red");
+
+}
+//2
+void conectarGPRS() {
+  bool conectado = false;
+  while(!conectado){
+    SerialMon.print("Conectando al servicio GPRS...");
+    EnviarDatos("Conectando al servicio GPRS...");
+
+    if (modem.gprsConnect(apn, gprsUser, gprsPass)) {
+      SerialMon.println("Conexión exitosa al servicio GPRS");
+      EnviarDatos("Conexión exitosa al servicio GPRS");
+      conectado = true;
+    } else {
+      SerialMon.println("Fallo al conectar al servicio GPRS");
+      EnviarDatos("Fallo al conectar al servicio GPRS");
+    }
+  }
+}
+//3
+void LimpiarBuffer() {
+  // Configurar modo texto para leer los mensajes SMS
+  SerialAT.println("AT+CMGF=1");
+  delay(500);
+  
+  // Leer todos los mensajes SMS
+  SerialAT.println("AT+CMGL=\"ALL\"");
+  delay(500);
+  
+  // Eliminar todos los mensajes de la bandeja de entrada
+  while (SerialAT.available()) {
+    String response = SerialAT.readStringUntil('\n');
+    if (response.startsWith("+CMGL:")) {
+      // Obtener el número del mensaje
+      String index = response.substring(response.indexOf(":")+2, response.indexOf(","));
+      
+      // Eliminar el mensaje
+      SerialAT.println("AT+CMGD=" + index);
+      delay(500); // Esperar un poco antes de eliminar el siguiente mensaje
+    }
+  }
+  SerialMon.println("Eliminando bandeja...");
+  EnviarDatos("Eliminando bandeja...");
+  // Esperar un tiempo después de borrar los mensajes antes de permitir que se reciban nuevos mensajes
+  delay(5000);
+}
+//4
+void enviarBienvenida(){
+
+  bool mensajeEnviado = false;
+  while(!mensajeEnviado) {
+
+    SerialMon.println("Enviando mensaje...");
+    EnviarDatos("Enviando mensaje...");
+    delay(2000);  // Pequeña pausa para no saturar el módem
+
+    if (modem.sendSMS(numeroCelular, MensajeInicio)) {
+        SerialMon.println("Mensaje enviado con éxito");
+        EnviarDatos("Mensaje enviado con éxito");
+        mensajeEnviado = true;  // Actualizamos el estado a verdadero cuando el mensaje se envía con éxito
+    } else {
+      SerialMon.println("Error al enviar el mensaje");
+      EnviarDatos("Error al enviar el mensaje");
+    }
+  }
+}
+//5
+void coordenadas(){
+  bool obtenerCoordenadas = false;
+  if (!obtenerCoordenadas) {
+        while (SerialGPS.available()) {
+            int c = SerialGPS.read();
+            if (gps.encode(c)) {
+                if (gps.location.isValid()) {
+                    locationData = String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6);
+                    obtenerCoordenadas = true;
+                      SerialMon.println(locationData);
+                      if(locationData == " "){
+                        obtenerCoordenadas = false;
+                      }
+                      EnviarDatos(locationData);
+                    break; // Salir del bucle
+                }
+            }
+        }
+    }
+
+    if (SerialAT.available()) {
+        Serial.write(SerialAT.read());
+    }
+    if (Serial.available()) {
+        SerialAT.write(Serial.read());
+    }
+}
+//6
+void LeerSMS() {
+  bool mensajeLeido = false;  // Variable para controlar si se ha leído un mensaje
+
+  while (!mensajeLeido) {  // Continuar mientras no se haya leído un mensaje
+    SerialAT.println("AT+CMGL=\"REC UNREAD\"");  // Solicitar mensajes no leídos
+    delay(1000);  // Dar tiempo para que la respuesta llegue
+
+    while (SerialAT.available()) {
+      String response = SerialAT.readStringUntil('\n');
+      if (response.startsWith("+CMGL:")) {
+        String sender = response.substring(response.indexOf(",") + 1);
+        sender = sender.substring(0, sender.indexOf(","));  // Extraer número del remitente
+        Serial.println("Mensaje recibido de: " + sender);
+        EnviarDatos("Mensaje recibido de: " + sender);
+        mensajeLeido = true;  // Marcar que se ha leído un mensaje
+        break;  // Salir del bucle interno
+      }
+    }
+    if (!mensajeLeido) {
+      Serial.println("No hay mensajes nuevos. Reintentando...");
+      EnviarDatos("No hay mensajes nuevos. Reintentando...");
+      delay(5000);  // Esperar antes de volver a solicitar
+    }
+  }
+}
+//7
+void enviarCoordenadas() {
+
+  String message = locationData;
+  bool coordenadasEnviadas = false;
+
+  while (!coordenadasEnviadas) {  // Continuar intentando hasta que el mensaje se envíe con éxito
+    SerialMon.println("Enviando coordenadas...");
+    EnviarDatos("Enviando coordenadas...");
+    if (modem.sendSMS(numeroCelular, message)) {
+      SerialMon.println("Mensaje enviado con éxito");
+      EnviarDatos("Mensaje enviado con éxito");
+      coordenadasEnviadas = true;  // Cambiar la bandera cuando el mensaje se envíe con éxito
+    } else {
+      SerialMon.println("Error al enviar el mensaje, reintentando...");
+      EnviarDatos("Error al enviar el mensaje, reintentando...");
+      delay(5000);  // Espera 5 segundos antes de reintentar
+    }
+  }
+}
+//8
+void EnviarDatos(String mensaje){
+  udp.beginPacket(udpAddress, udpPort);
+  udp.print(mensaje);
+  udp.endPacket();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
