@@ -58,7 +58,7 @@ TinyGsmClient client(modem);
 TinyGPSPlus gps;
 String locationData;
 String MensajeInicio = "¡Hola y bienvenido!\nTu dispositivo esta listo para ayudarte a encontrar a tu mascota. Solo necesitas enviarnos un mensaje y te enviaremos las coordenadas!";
-String numeroCelular = "+573215098953";
+String numeroCelular = "+573215098953"; // aqui puedes cambiar el numero celular
 bool EnviadoMensajeBienvenida = false;
 
 WiFiUDP udp;      
