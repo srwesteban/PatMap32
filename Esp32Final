@@ -47,9 +47,9 @@ const char apn[] = "internet.comcel.com.co";  // APN de tu operador móvil
 const char gprsUser[] = "comcel";  // Nombre de usuario GPRS, si es necesario
 const char gprsPass[] = "comcel";  // Contraseña de usuario GPRS, si es necesario
 
-const char *networkName = "REPETIDOR MORA";
-const char *networkPswd = "1085347316";
-const char *udpAddress = "192.168.1.124";
+const char *networkName = "iPhone W";
+const char *networkPswd = "10101010";
+const char *udpAddress = "172.20.10.4";
 const int udpPort = 3333;
 
 TinyGsm modem(SerialAT);
@@ -82,27 +82,28 @@ void setup() {
 }
 
 void loop() {
-
-  conectarRed();//1
-  conectarGPRS();//2
-  LimpiarBuffer();//3
-  LimpiarBuffer();
-  if(!EnviadoMensajeBienvenida){
-    enviarBienvenida();//4
-    EnviadoMensajeBienvenida = true;
-  }
-  coordenadas();
-  SerialMon.println("Listo para recibir mensajes");
-  LeerSMS();
-  coordenadas();
-  enviarCoordenadas();
-  delay(10000); // Espera 10 segundos antes de repetir
+    conectarRed(); //1
+    conectarGPRS(); //2
+    LimpiarBuffer(); //3
+    LimpiarBuffer();
+    coordenadas();
+    if (!EnviadoMensajeBienvenida) {
+        enviarBienvenida(); //4
+        EnviadoMensajeBienvenida = true;
+        locationData = "";
+    }
+    SerialMon.println("Listo para recibir mensajes");
+    LeerSMS();
+    coordenadas();
+    enviarCoordenadas();
+    delay(5000); // Espera 5 segundos antes de repetir
 }
+
 
 
 //1
 void conectarRed() {
-
+  // Intentar inicializar el módem hasta que tenga éxito
   do {
     digitalWrite(MODEM_PWRKEY_PIN, LOW);
     delay(1000);
@@ -117,15 +118,18 @@ void conectarRed() {
   SerialMon.print("Conectando a la red...");
   EnviarDatos("Conectando a la red...");
 
+  // Intentar conectarse a la red
   if (!modem.waitForNetwork()) {
     SerialMon.println("Fallo al conectarse a la red");
     EnviarDatos("Fallo al conectarse a la red");
-    while (true);
+    while (true);  // Bucle infinito si falla la conexión a la red
   }
+
+  // Si se conecta a la red con éxito
   SerialMon.println("Conexión exitosa a la red");
   EnviarDatos("Conexión exitosa a la red");
-
 }
+
 //2
 void conectarGPRS() {
   bool conectado = false;
@@ -191,26 +195,38 @@ void enviarBienvenida(){
   }
 }
 //5
-void coordenadas(){
-  bool obtenerCoordenadas = false;
-  if (!obtenerCoordenadas) {
+void coordenadas() {
+    bool obtenerCoordenadas = false;
+    locationData = "";  // Reiniciar locationData antes de intentar obtener nuevas coordenadas
+
+    while (!obtenerCoordenadas) {
+        SerialMon.println("Intentando obtener coordenadas..."); // Mensaje de depuración
+
         while (SerialGPS.available()) {
             int c = SerialGPS.read();
             if (gps.encode(c)) {
                 if (gps.location.isValid()) {
                     locationData = String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6);
-                    obtenerCoordenadas = true;
-                      SerialMon.println(locationData);
-                      if(locationData == " "){
-                        obtenerCoordenadas = false;
-                      }
-                      EnviarDatos(locationData);
-                    break; // Salir del bucle
+                    if (locationData != "") {
+                        obtenerCoordenadas = true;
+                        SerialMon.println("Coordenadas obtenidas: " + locationData);
+                        EnviarDatos("Coordenadas obtenidas: " + locationData);
+                        break; // Salir del bucle interno si se obtienen coordenadas válidas
+                    } else {
+                        SerialMon.println("Coordenadas inválidas. Reintentando...");
+                    }
+                } else {
+                    SerialMon.println("GPS no tiene una ubicación válida aún.");
                 }
+            } else {
+                SerialMon.println("Error al codificar datos del GPS.");
             }
         }
+        // Añadimos un retraso en el bucle externo para evitar demasiadas iteraciones rápidas
+        delay(2000); // Espera 1 segundo antes de intentar de nuevo
     }
 
+    // Transferencia de datos entre SerialAT y Serial
     if (SerialAT.available()) {
         Serial.write(SerialAT.read());
     }
@@ -218,6 +234,8 @@ void coordenadas(){
         SerialAT.write(Serial.read());
     }
 }
+
+
 //6
 void LeerSMS() {
   bool mensajeLeido = false;  // Variable para controlar si se ha leído un mensaje
@@ -270,16 +288,3 @@ void EnviarDatos(String mensaje){
   udp.print(mensaje);
   udp.endPacket();
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
